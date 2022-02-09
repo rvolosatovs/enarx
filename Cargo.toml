@@ -51,7 +51,7 @@ semver = "1.0"
 goblin = "0.4"
 libc = "0.2"
 lset = "0.2"
-vdso = "0.1"
+vdso = "0.2"
 
 [build-dependencies]
 cc = "1.0"
