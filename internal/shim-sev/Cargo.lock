@@ -22,9 +22,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.50"
+version = "0.1.71"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4fd27448c11cdc03f9be9babc79e2aba19789a1db6fe0a1390d53f99f3f8fb1"
+checksum = "163437f05ca8f29d7e9128ea728dedf5eb620e445fbca273641d3a3050305f23"
 
 [[package]]
 name = "crt0stack"
