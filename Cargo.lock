@@ -172,7 +172,7 @@ dependencies = [
  "mmarinus",
  "nbytes",
  "openssl",
- "primordial",
+ "primordial 0.5.0",
  "process_control",
  "protobuf",
  "protobuf-codegen-pure",
@@ -454,6 +454,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55d6312462222758b3fb6c7e84d819ce87c315c446e0e2c11b0b9258dedd3f25"
 
 [[package]]
+name = "primordial"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b24688c4d0374cf896ccde4b79d111d1c12e7b2ab6ec272c57aedc304cb1791d"
+
+[[package]]
 name = "proc-macro-error"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -602,7 +608,7 @@ source = "git+https://github.com/enarx/sallyport?rev=a567a22665c7e5ba88a8c4acd64
 dependencies = [
  "goblin 0.4.3",
  "libc",
- "primordial",
+ "primordial 0.3.0",
 ]
 
 [[package]]
