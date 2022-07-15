@@ -33,7 +33,7 @@ zeroize = { version = "1.5.4", features = ["alloc"], default-features = false }
 # - we don't want to be notified by dependabot, if there is no new version of wasmtime
 wasmtime = { version = "0.38.1", features = ["cranelift", "pooling-allocator"], default-features = false }
 cap-std = { version = "=0.24.3", default-features = false }
-io-lifetimes = { version = "=0.5.3", default-features = false }
+io-lifetimes = { version = "=0.7.2", default-features = false }
 rustix = { version = "=0.33.7", features = ["std"], default-features = false }
 system-interface = { version = "=0.20.0", default-features = false }
 wasi-common = { version = "=0.38.1", default-features = false }
