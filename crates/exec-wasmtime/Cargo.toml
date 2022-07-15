@@ -41,7 +41,7 @@ wasmtime-wasi = { version = "=0.38.1", features = ["sync"], default-features = f
 wiggle = { version = "=0.38.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-io-extras = { version = "=0.13.2", default-features = false }
+io-extras = { version = "=0.15.0", default-features = false }
 
 [dev-dependencies]
 wat = { version = "1.0", default-features = false }
