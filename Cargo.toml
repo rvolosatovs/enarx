@@ -1,6 +1,6 @@
 [package]
 name = "enarx"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "Tools for deploying WebAssembly into Enarx Keeps"
 authors = ["The Enarx Project Developers"]
