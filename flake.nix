@@ -160,6 +160,19 @@
               config.Cmd = [cargo.toml.package.name];
               config.Env = ["PATH=${bin}/bin"];
             };
+
+          buildDebugImage = bin:
+            pkgs.dockerTools.buildImage {
+              name = "${cargo.toml.package.name}-debug";
+              tag = cargo.toml.package.version;
+              contents = [
+                bin
+                pkgs.bashInteractive
+                pkgs.busybox
+                pkgs.strace
+              ];
+              config.Cmd = ["/bin/${cargo.toml.package.name}"];
+            };
         in {
           formatter = pkgs.alejandra;
 
@@ -170,6 +183,7 @@
               "${cargo.toml.package.name}" = dynamicBin;
               "${cargo.toml.package.name}-static" = staticBin;
               "${cargo.toml.package.name}-static-oci" = buildImage staticBin;
+              "${cargo.toml.package.name}-static-oci-debug" = buildDebugImage staticBin;
             }
             // pkgs.lib.optionalAttrs (system == aarch64-darwin) {
               "${cargo.toml.package.name}-aarch64-apple-darwin" = aarch64DarwinBin;
