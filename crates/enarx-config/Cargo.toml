@@ -12,6 +12,7 @@ categories = ["config"]
 exclude = [".github/"]
 
 [dependencies]
+drawbridge-type = { workspace = true }
 serde = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 

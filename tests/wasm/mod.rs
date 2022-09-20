@@ -5,7 +5,7 @@ use super::{check_output, enarx, CRATE, KEEP_BIN, OUT_DIR, TEST_BINS_OUT};
 use std::borrow::BorrowMut;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, thread};
@@ -17,6 +17,15 @@ use rustls::client::{ServerCertVerified, ServerCertVerifier};
 use rustls::version::TLS13;
 use rustls::Certificate;
 use tempfile::{tempdir, NamedTempFile};
+
+const STDIO_CONFIG: &str = r#"[stdin]
+kind = "host"
+
+[stdout]
+kind = "host"
+
+[stderr]
+kind = "host""#;
 
 pub fn enarx_run<'a>(
     wasm: &Path,
@@ -172,41 +181,53 @@ fn compile(wasm: &str) -> PathBuf {
 }
 
 #[test]
-fn return_1() {
+fn return_1() -> anyhow::Result<()> {
     // This module does, in fact, return 1. But function return values
     // are separate from setting the process exit status code, so
     // we still expect a return code of '0' here.
     let wasm = compile("return_1.wasm");
-    check_output(&enarx_run(&wasm, None, None), 0, None, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
+    Ok(())
 }
 
 #[test]
-fn wasi_snapshot1() {
+fn wasi_snapshot1() -> anyhow::Result<()> {
     // This module uses WASI to return the number of commandline args.
     // Since we don't currently do anything with the function return value,
     // we don't get any output here, and we expect '0', as above.
     let wasm = compile("wasi_snapshot1.wasm");
-    check_output(&enarx_run(&wasm, None, None), 0, None, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
+    Ok(())
 }
 
 #[test]
-fn hello_wasi_snapshot1() {
+fn hello_wasi_snapshot1() -> anyhow::Result<()> {
     // This module just prints "Hello, world!" to stdout. Hooray!
     let wasm = compile("hello_wasi_snapshot1.wasm");
     const OUTPUT: &[u8] = br#"Hello, world!
 "#;
-    check_output(&enarx_run(&wasm, None, None), 0, OUTPUT, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, OUTPUT, None);
+    Ok(())
 }
 
 #[test]
-fn no_export() {
+fn no_export() -> anyhow::Result<()> {
     // This module has no exported functions, so we get an error.
     let wasm = compile("no_export.wasm");
-    check_output(&enarx_run(&wasm, None, None), 1, None, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 1, None, None);
+    Ok(())
 }
 
 #[test]
-fn echo() {
+fn echo() -> anyhow::Result<()> {
     let wasm = wasm_path(env!("CARGO_BIN_FILE_ENARX_WASM_TESTS_echo"));
 
     let mut input: Vec<_> = Vec::with_capacity(2 * 1024 * 1024);
@@ -214,19 +235,28 @@ fn echo() {
         input.push(i as _);
     }
     let input = input.as_slice();
-    check_output(&enarx_run(&wasm, None, input), 0, input, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), input), 0, input, None);
+    Ok(())
 }
 
 #[test]
-fn memspike() {
+fn memspike() -> anyhow::Result<()> {
     let wasm = wasm_path(env!("CARGO_BIN_FILE_ENARX_WASM_TESTS_memspike"));
-    check_output(&enarx_run(&wasm, None, None), 0, None, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
+    Ok(())
 }
 
 #[test]
-fn memory_stress_test() {
+fn memory_stress_test() -> anyhow::Result<()> {
     let wasm = wasm_path(env!("CARGO_BIN_FILE_ENARX_WASM_TESTS_memory_stress_test"));
-    check_output(&enarx_run(&wasm, None, None), 0, None, None);
+    let mut conf = NamedTempFile::new().context("failed to create config file")?;
+    write!(conf, "{STDIO_CONFIG}").context("failed to write config file")?;
+    check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
+    Ok(())
 }
 
 #[test]
@@ -239,20 +269,6 @@ fn zerooneone() -> anyhow::Result<()> {
 0118 999 881 999 119 725 3
 "#;
 
-    check_output(&enarx_run(&wasm, None, INPUT), 0, OUTPUT, None);
-
-    let url = Url::from_file_path(&wasm).expect("failed to construct a URL from path");
-    check_output(&enarx_deploy(&url, INPUT), 0, OUTPUT, None);
-
-    const CONF: &str = r#"[[files]]
-kind = "stdin"
-
-[[files]]
-kind = "stdout"
-
-[[files]]
-kind = "stderr""#;
-
     // TODO: Extract the `enarx deploy` test into a separate test case or use `enarx deploy`
     // in all test cases.
     let pkg = tempdir().context("failed to create temporary package directory")?;
@@ -260,7 +276,7 @@ kind = "stderr""#;
     let pkg_conf = pkg.path().join("Enarx.toml");
 
     fs::copy(&wasm, &pkg_wasm).context("failed to copy WASM module")?;
-    fs::write(&pkg_conf, CONF).context("failed to write config")?;
+    fs::write(&pkg_conf, STDIO_CONFIG).context("failed to write config")?;
 
     check_output(&enarx_run(&wasm, Some(&pkg_conf), INPUT), 0, OUTPUT, None);
 
@@ -293,9 +309,16 @@ fn assert_stream<T: Read + Write>(mut stream: impl BorrowMut<T>) -> anyhow::Resu
 fn connect_tcp() -> anyhow::Result<()> {
     let wasm = wasm_path(env!("CARGO_BIN_FILE_ENARX_WASM_TESTS_connect"));
 
-    let listener =
+    let listener_pre =
         TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).context("failed to start TCP listener")?;
-    let port = listener
+    let port_pre = listener_pre
+        .local_addr()
+        .context("failed to query listener local address")?
+        .port();
+
+    let listener_run =
+        TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).context("failed to start TCP listener")?;
+    let port_run = listener_run
         .local_addr()
         .context("failed to query listener local address")?
         .port();
@@ -303,29 +326,36 @@ fn connect_tcp() -> anyhow::Result<()> {
     let mut conf = NamedTempFile::new().context("failed to create config file")?;
     write!(
         conf,
-        r#"[[files]]
-kind = "stdin"
+        r#"[stdin]
+kind = "host"
 
-[[files]]
-kind = "stdout"
+[stdout]
+kind = "host"
 
-[[files]]
-kind = "stderr"
+[stderr]
+kind = "host"
 
-[[files]]
-kind = "connect"
-prot = "tcp"
-host = "{}"
-port = {port}
-name = "stream""#,
+[connect."{}:{port_pre}"]
+prot = "tcp""#,
         Ipv4Addr::LOCALHOST,
     )
     .context("failed to write config file")?;
 
-    let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("failed to accept connection");
-        assert_stream(stream).expect("failed to assert stream");
-    });
+    let server = thread::Builder::new()
+        .name("server".into())
+        .spawn(move || {
+            let (mut stream_pre, _) = listener_pre
+                .accept()
+                .expect("failed to accept preconfigured TCP connection");
+            writeln!(stream_pre, "{port_run}").expect("failed to send runtime connection port");
+            let (stream_run, _) = listener_run
+                .accept()
+                .expect("failed to accept runtime TCP connection");
+
+            assert_stream(stream_pre).expect("failed to assert preconfigured TCP stream");
+            assert_stream(stream_run).expect("failed to assert runtime TCP stream");
+        })
+        .expect("failed to start server thread");
     check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
     server.join().expect("failed to join server thread");
     Ok(())
@@ -434,7 +464,7 @@ fn listen_tcp() -> anyhow::Result<()> {
 
     let listener =
         TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).context("failed to start TCP listener")?;
-    let port = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+    let port_pre = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
         .context("failed to start TCP listener")?
         .local_addr()
         .context("failed to query listener local address")?
@@ -443,42 +473,55 @@ fn listen_tcp() -> anyhow::Result<()> {
     let mut conf = NamedTempFile::new().context("failed to create config file")?;
     write!(
         conf,
-        r#"[[files]]
-kind = "stdin"
+        r#"[stdin]
+kind = "host"
 
-[[files]]
-kind = "stdout"
+[stdout]
+kind = "host"
 
-[[files]]
-kind = "stderr"
+[stderr]
+kind = "host"
 
-[[files]]
-kind = "listen"
+[listen."localhost:{port_pre}"]
 prot = "tcp"
-port = {port}
-name = "ingest"
 
-[[files]]
-kind = "connect"
-prot = "tcp"
-host = "{}"
-port = {}
-name = "ping""#,
+[connect."{}:{}"]
+prot = "tcp""#,
         Ipv4Addr::LOCALHOST,
         listener.local_addr().unwrap().port()
     )
     .context("failed to write config file")?;
 
-    let client = thread::spawn(move || {
-        println!("waiting for workload to start...");
-        _ = listener.accept().expect("failed to accept connection");
+    let client = thread::Builder::new()
+        .name("client".into())
+        .spawn(move || {
+            println!("waiting for workload to start...");
+            let (mut stream, _) = listener.accept().expect("failed to accept connection");
+            println!("workload has started (ping received)");
 
-        assert_connect(|| {
-            TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-                .context("failed to connect to TCP socket")
+            let port_run = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .expect("failed to start TCP listener")
+                .local_addr()
+                .expect("failed to query listener local address")
+                .port();
+            stream
+                .write_all(format!("{port_run}").as_bytes())
+                .expect("failed to send runtime listening port");
+            stream
+                .shutdown(Shutdown::Both)
+                .expect("failed to shutdown stream");
+
+            let connect = |port| {
+                move || {
+                    TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+                        .context("failed to connect to TCP socket")
+                }
+            };
+            assert_connect(connect(port_pre))
+                .expect("failed to assert preconfigured TCP connection");
+            assert_connect(connect(port_run)).expect("failed to assert runtime TCP connection");
         })
-        .expect("failed to assert TCP connection");
-    });
+        .expect("failed to start client thread");
     check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
     client.join().expect("failed to join client thread");
     Ok(())
@@ -507,7 +550,7 @@ fn listen_tls() -> anyhow::Result<()> {
 
     let listener =
         TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).context("failed to start TCP listener")?;
-    let port = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+    let port_pre = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
         .context("failed to start TCP listener")?
         .local_addr()
         .context("failed to query listener local address")?
@@ -516,56 +559,67 @@ fn listen_tls() -> anyhow::Result<()> {
     let mut conf = NamedTempFile::new().context("failed to create config file")?;
     write!(
         conf,
-        r#"[[files]]
-kind = "stdin"
+        r#"[stdin]
+kind = "host"
 
-[[files]]
-kind = "stdout"
+[stdout]
+kind = "host"
 
-[[files]]
-kind = "stderr"
+[stderr]
+kind = "host"
 
-[[files]]
-kind = "listen"
+[listen."{port_pre}"]
 prot = "tls"
-port = {port}
-name = "ingest"
 
-[[files]]
-kind = "connect"
-prot = "tcp"
-host = "{}"
-port = {}
-name = "ping""#,
+[connect."{}:{}"]
+prot = "tcp""#,
         Ipv4Addr::LOCALHOST,
         listener.local_addr().unwrap().port()
     )
     .context("failed to write config file")?;
 
-    let tls = Arc::new(
-        rustls::ClientConfig::builder()
-            .with_safe_default_cipher_suites()
-            .with_safe_default_kx_groups()
-            .with_protocol_versions(&[&TLS13])
-            .context("failed to select TLS protocol versions")?
-            .with_custom_certificate_verifier(Arc::new(NoopCertVerifier))
-            .with_no_client_auth(),
-    );
+    let client = thread::Builder::new()
+        .name("client".into())
+        .spawn(move || {
+            println!("waiting for workload to start...");
+            let (mut stream, _) = listener.accept().expect("failed to accept connection");
+            println!("workload has started (ping received)");
 
-    let client = thread::spawn(move || {
-        println!("waiting for workload to start...");
-        _ = listener.accept().expect("failed to accept connection");
+            let port_run = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .expect("failed to start TCP listener")
+                .local_addr()
+                .expect("failed to query listener local address")
+                .port();
+            stream
+                .write_all(format!("{port_run}").as_bytes())
+                .expect("failed to send runtime listening port");
+            stream
+                .shutdown(Shutdown::Both)
+                .expect("failed to shutdown stream");
 
-        assert_connect(|| {
-            let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-                .context("failed to connect to TCP socket")?;
-            let tls =
-                rustls::ClientConnection::new(Arc::clone(&tls), "localhost".try_into().unwrap())
-                    .context("failed to create TLS connection")?;
-            Ok(rustls::StreamOwned::new(tls, stream))
+            let connect = |port| {
+                move || {
+                    let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+                        .context("failed to connect to TCP socket")?;
+                    let tls = Arc::new(
+                        rustls::ClientConfig::builder()
+                            .with_safe_default_cipher_suites()
+                            .with_safe_default_kx_groups()
+                            .with_protocol_versions(&[&TLS13])
+                            .context("failed to select TLS protocol versions")?
+                            .with_custom_certificate_verifier(Arc::new(NoopCertVerifier))
+                            .with_no_client_auth(),
+                    );
+                    let tls = rustls::ClientConnection::new(tls, "localhost".try_into().unwrap())
+                        .context("failed to create TLS connection")?;
+                    anyhow::Result::Ok(rustls::StreamOwned::new(tls, stream))
+                }
+            };
+            assert_connect(connect(port_pre))
+                .expect("failed to assert preconfigured TLS connection");
+            assert_connect(connect(port_run)).expect("failed to assert runtime TLS connection");
         })
-        .expect("failed to assert TLS connection");
-    });
+        .expect("failed to spawn client thread");
     check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
     client.join().expect("failed to join client thread");
     Ok(())

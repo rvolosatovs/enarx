@@ -108,29 +108,22 @@ VAR1 = "var1"
 VAR2 = "var2"
 
 # Pre-opened file descriptors
-[[files]]
+[stdin]
 kind = "null"
 
-[[files]]
+[stdout]
 kind = "stdout"
 
-[[files]]
+[stderr]
 kind = "stderr"
 
 # A listen socket
-[[files]]
-name = "listen"
-kind = "listen"
+[listen.12345]
 prot = "tls" # or prot = "tcp"
-port = 12345
 
 # An outgoing connected socket
-[[files]]
-name = "connect"
-kind = "connect"
+[connect."127.0.0.1:23456"]
 prot = "tcp" # or prot = "tls"
-host = "127.0.0.1"
-port = 23456
 ```
 
 This configuration files passes the environment `VAR1=var1 VAR2=var2` and the arguments `--argument1 --argument2=foo` to the WASM application.
@@ -139,9 +132,6 @@ Additionally, five file descriptors are pre-opened:
 - 0: `/dev/null`
 - 1: `/dev/stdout`
 - 2: `/dev/stderr`
-- 3: a TCP listen socket bound to port `12345` on address `::`, where every accepted connection is transparently wrapped with the TLS protocol 
-- 4: a normal TCP stream socket connected to `127.0.0.1:23456`
-
-Additionally, the following environment variables are exported:
-- `FD_COUNT=5`
-- `FD_NAMES=null:stdout:stderr:listen:connect`
+- 3: Virtual root file system, containing:
+    - `/net/lis/12345`: a TCP listen socket bound to port `12345` on address `::`, where every accepted connection is transparently wrapped with the TLS protocol 
+    - `/net/con/127.0.0.1:23456`: a normal TCP stream socket connected to `127.0.0.1:23456`

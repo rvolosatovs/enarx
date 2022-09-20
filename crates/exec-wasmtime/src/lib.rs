@@ -13,6 +13,8 @@ pub use workload::{Package, Workload, PACKAGE_CONFIG, PACKAGE_ENTRYPOINT};
 
 use runtime::Runtime;
 
+use futures::executor::block_on;
+
 /// The Arguments
 // NOTE: `repr(C)` is required, otherwise `toml` serialization fails with `values must be emitted before tables`
 #[derive(Debug)]
@@ -25,7 +27,7 @@ pub struct Args {
 
 /// Execute
 pub fn execute_with_args(args: Args) -> anyhow::Result<()> {
-    Runtime::execute(args.package).map(|_| ())
+    block_on(Runtime::execute(args.package)).map(|_| ())
 }
 
 /// Execute
@@ -110,10 +112,10 @@ mod test {
         file.rewind().context("failed to rewind file")?;
         #[cfg(unix)]
         let file = file.into_raw_fd();
-        Runtime::execute(Package::Local {
+        block_on(Runtime::execute(Package::Local {
             wasm: file,
             conf: None,
-        })
+        }))
     }
 
     #[test]

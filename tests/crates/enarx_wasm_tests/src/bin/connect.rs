@@ -4,29 +4,47 @@
 
 use enarx_wasm_tests::assert_stream;
 
-use std::env;
+use std::fs::{read_dir, File};
+use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
-
 #[cfg(unix)]
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::OwnedFd;
 #[cfg(target_os = "wasi")]
-use std::os::wasi::io::FromRawFd;
+use std::os::wasi::io::OwnedFd;
 
-use anyhow::{ensure, Context};
+use anyhow::{anyhow, ensure, Context};
 
 fn main() -> anyhow::Result<()> {
-    let fd_count: usize = env::var("FD_COUNT")
-        .context("failed to lookup `FD_COUNT`")?
-        .parse()
-        .context("failed to parse `FD_COUNT`")?;
-    ensure!(
-        fd_count == 4, // STDIN, STDOUT, STDERR and the socket connected to the endpoint
-        "unexpected amount of file descriptors received"
-    );
-    ensure!(
-        env::var("FD_NAMES").context("failed to lookup `FD_NAMES`")?
-            == "stdin:stdout:stderr:stream"
-    );
+    let mut con = read_dir("/net/con").context("failed to list connected streams")?;
+    let stream_pre = con
+        .next()
+        .ok_or_else(|| anyhow!("no stream found"))?
+        .context("failed to acquire directory entry")?;
+    let mut stream_pre = File::options()
+        .read(true)
+        .write(true)
+        .open(stream_pre.path())
+        .map(OwnedFd::from)
+        .map(TcpStream::from)
+        .context("failed to open preconfigured stream")?;
+    ensure!(con.next().is_none(), "more than one stream present");
 
-    assert_stream(unsafe { TcpStream::from_raw_fd(3) })
+    let mut addr = format!("localhost:");
+    BufReader::new(&mut stream_pre)
+        .read_line(&mut addr)
+        .context("failed to read runtime connection port")?;
+    let addr = addr.trim();
+    eprintln!("connecting to `{addr}`...");
+    let stream_run = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(format!("/net/con/{addr}"))
+        .map(OwnedFd::from)
+        .map(TcpStream::from)
+        .context("failed to open runtime stream")?;
+
+    assert_stream(stream_pre).context("failed to assert preconfigured stream")?;
+    assert_stream(stream_run).context("failed to assert runtime stream")?;
+    Ok(())
 }

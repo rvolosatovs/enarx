@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-
 //! Configuration for a WASI application in an Enarx Keep
 //!
 #![doc = include_str!("../README.md")]
@@ -9,11 +8,14 @@
 #![warn(rust_2018_idioms)]
 
 use std::collections::HashMap;
-use std::ops::Deref;
 
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use url::Url;
+
+// TODO: Create a shared Enarx type crate.
+// This should be revisited once we address https://github.com/enarx/enarx/issues/2367 and probably
+// completely removed.
+pub use drawbridge_type::{TreeName as FileName, TreePath as Path};
 
 /// Configuration file template
 pub const CONFIG_TEMPLATE: &str = r#"## Configuration for a WASI application in an Enarx Keep
@@ -32,90 +34,26 @@ pub const CONFIG_TEMPLATE: &str = r#"## Configuration for a WASI application in 
 # VAR1 = "var1"
 # VAR2 = "var2"
 
-## Pre-opened file descriptors
-[[files]]
-kind = "stdin"
+# Standard input file
+[stdin]
+kind = "host" # or kind = "null"
 
-[[files]]
-kind = "stdout"
+# Standard output file
+[stdout]
+kind = "host" # or kind = "null"
 
-[[files]]
-kind = "stderr"
+# Standard error file
+[stderr]
+kind = "host" # or kind = "null"
 
-## A listen socket
-# [[files]]
-# name = "listen"
-# kind = "listen"
-# prot = "tls" # or prot = "tcp"
-# port = 12345
+## A listen socket on port 12345
+#[listen.12345]
+#prot = "tls" # or prot = "tcp"
 
-## An outgoing connected socket
-# [[files]]
-# name = "stream"
-# kind = "connect"
-# prot = "tls" # or prot = "tcp"
-# host = "localhost"
-# port = 23456
+## An outgoing connected stream
+#[connect."localhost:23456"]
+#prot = "tls" # or prot = "tcp"
 "#;
-
-const fn default_tcp_port() -> u16 {
-    80
-}
-
-const fn default_tls_port() -> u16 {
-    443
-}
-
-fn default_addr() -> String {
-    "::".into()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-/// Name assigned to a file descriptor
-///
-/// This is used to export the `FD_NAMES` environment variable,
-/// which is a concatenation of all file descriptors names seperated by `:`.
-///
-/// See the [crate] documentation for examples.
-pub struct FileName(String);
-
-impl TryFrom<String> for FileName {
-    type Error = &'static str;
-
-    fn try_from(name: String) -> Result<Self, Self::Error> {
-        if name.find(':').is_some() {
-            Err("file name must not contain ':'")
-        } else {
-            Ok(Self(name))
-        }
-    }
-}
-
-impl TryFrom<&str> for FileName {
-    type Error = <FileName as TryFrom<String>>::Error;
-
-    fn try_from(name: &str) -> Result<Self, Self::Error> {
-        String::from(name).try_into()
-    }
-}
-
-impl Deref for FileName {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for FileName {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let name = String::deserialize(deserializer)?;
-        name.try_into().map_err(D::Error::custom)
-    }
-}
 
 /// The configuration for an Enarx WASI application
 ///
@@ -127,65 +65,40 @@ impl<'de> Deserialize<'de> for FileName {
 /// extern crate toml;
 /// use enarx_config::Config;
 /// const CONFIG: &str = r#"
-/// [[files]]
-/// name = "listen"
-/// kind = "listen"
+/// [listen.12345]
 /// prot = "tls"
-/// port = 12345
 /// "#;
 ///
 /// let config: Config = toml::from_str(CONFIG).unwrap();
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// An optional Steward URL
-    #[serde(default)]
     pub steward: Option<Url>,
 
     /// The arguments to provide to the application
-    #[serde(default)]
     pub args: Vec<String>,
 
-    /// The array of pre-opened file descriptors
-    #[serde(default)]
-    pub files: Vec<File>,
-
     /// The environment variables to provide to the application
-    #[serde(default)]
     pub env: HashMap<String, String>,
-}
 
-impl Default for Config {
-    fn default() -> Self {
-        let files = vec![
-            File::Stdin(Default::default()),
-            File::Stdout(Default::default()),
-            File::Stderr(Default::default()),
-        ];
+    /// Standard input file. Null by default.
+    pub stdin: StdioFile,
 
-        Self {
-            env: HashMap::new(),
-            args: vec![],
-            files,
-            steward: None, // TODO: Default to a deployed Steward instance
-        }
-    }
-}
+    /// Standard output file. Null by default.
+    pub stdout: StdioFile,
 
-/// `/dev/null` file descriptor
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NullFile {
-    /// Name assigned to the file descriptor
-    name: Option<FileName>,
-}
+    /// Standard error file. Null by default.
+    pub stderr: StdioFile,
 
-/// Standard I/O file descriptor
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StdioFile {
-    /// Name assigned to the file descriptor
-    name: Option<FileName>,
+    /// Pre-defined listening sockets
+    #[serde(default)]
+    pub listen: HashMap<FileName, ListenFile>,
+
+    /// Pre-defined connected streams
+    #[serde(default)]
+    pub connect: HashMap<FileName, ConnectFile>,
 }
 
 /// File descriptor of a listen socket
@@ -194,33 +107,17 @@ pub struct StdioFile {
 pub enum ListenFile {
     /// TLS listen socket
     #[serde(rename = "tls")]
-    Tls {
-        /// Name assigned to the file descriptor
-        name: FileName,
-
-        /// Address to listen on
-        #[serde(default = "default_addr")]
-        addr: String,
-
-        /// Port to listen on
-        #[serde(default = "default_tls_port")]
-        port: u16,
-    },
+    Tls,
 
     /// TCP listen socket
     #[serde(rename = "tcp")]
-    Tcp {
-        /// Name assigned to the file descriptor
-        name: FileName,
+    Tcp,
+}
 
-        /// Address to listen on
-        #[serde(default = "default_addr")]
-        addr: String,
-
-        /// Port to listen on
-        #[serde(default = "default_tcp_port")]
-        port: u16,
-    },
+impl Default for ListenFile {
+    fn default() -> Self {
+        Self::Tls
+    }
 }
 
 /// File descriptor of a stream socket
@@ -229,75 +126,35 @@ pub enum ListenFile {
 pub enum ConnectFile {
     /// TLS stream socket
     #[serde(rename = "tls")]
-    Tls {
-        /// Name assigned to the file descriptor
-        name: Option<FileName>,
-
-        /// Host address to connect to
-        host: String,
-
-        /// Port to connect to
-        #[serde(default = "default_tls_port")]
-        port: u16,
-    },
+    Tls,
 
     /// TCP stream socket
     #[serde(rename = "tcp")]
-    Tcp {
-        /// Name assigned to the file descriptor
-        name: Option<FileName>,
-
-        /// Host address to connect to
-        host: String,
-
-        /// Port to connect to
-        #[serde(default = "default_tcp_port")]
-        port: u16,
-    },
+    Tcp,
 }
 
-/// Parameters for a pre-opened file descriptor
+impl Default for ConnectFile {
+    fn default() -> Self {
+        Self::Tls
+    }
+}
+
+/// Standard I/O file configuration
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
-pub enum File {
-    /// File descriptor of `/dev/null`
+pub enum StdioFile {
+    /// Discard standard I/O.
     #[serde(rename = "null")]
-    Null(NullFile),
+    Null,
 
-    /// File descriptor of stdin
-    #[serde(rename = "stdin")]
-    Stdin(StdioFile),
-
-    /// File descriptor of stdout
-    #[serde(rename = "stdout")]
-    Stdout(StdioFile),
-
-    /// File descriptor of stderr
-    #[serde(rename = "stderr")]
-    Stderr(StdioFile),
-
-    /// File descriptor of a listen socket
-    #[serde(rename = "listen")]
-    Listen(ListenFile),
-
-    /// File descriptor of a stream socket
-    #[serde(rename = "connect")]
-    Connect(ConnectFile),
+    /// Forward standard I/O to host.
+    #[serde(rename = "host")]
+    Host,
 }
 
-impl File {
-    /// Get the name for a file descriptor
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Null(NullFile { name }) => name.as_deref().unwrap_or("null"),
-            Self::Stdin(StdioFile { name }) => name.as_deref().unwrap_or("stdin"),
-            Self::Stdout(StdioFile { name }) => name.as_deref().unwrap_or("stdout"),
-            Self::Stderr(StdioFile { name }) => name.as_deref().unwrap_or("stderr"),
-            Self::Listen(ListenFile::Tls { name, .. }) => name,
-            Self::Listen(ListenFile::Tcp { name, .. }) => name,
-            Self::Connect(ConnectFile::Tls { name, host, .. }) => name.as_deref().unwrap_or(host),
-            Self::Connect(ConnectFile::Tcp { name, host, .. }) => name.as_deref().unwrap_or(host),
-        }
+impl Default for StdioFile {
+    fn default() -> Self {
+        Self::Null
     }
 }
 
@@ -305,95 +162,78 @@ impl File {
 mod test {
     use super::*;
 
-    const CONFIG: &str = r#"
-        [[files]]
-        kind = "stdin"
-
-        [[files]]
-        name = "X"
-        kind = "listen"
-        prot = "tcp"
-        port = 9000
-
-        [[files]]
-        kind = "stdout"
-
-        [[files]]
-        kind = "null"
-
-        [[files]]
-        kind = "stderr"
-
-        [[files]]
-        kind = "connect"
-        host = "example.com"
-        prot = "tls"
-    "#;
-
     #[test]
-    fn values() {
-        let cfg: Config = toml::from_str(CONFIG).unwrap();
-
-        assert_eq!(
-            cfg.files,
-            vec![
-                File::Stdin(Default::default()),
-                File::Listen(ListenFile::Tcp {
-                    name: "X".try_into().unwrap(),
-                    port: 9000,
-                    addr: default_addr()
-                }),
-                File::Stdout(Default::default()),
-                File::Null(Default::default()),
-                File::Stderr(Default::default()),
-                File::Connect(ConnectFile::Tls {
-                    name: Default::default(),
-                    port: default_tls_port(),
-                    host: "example.com".into(),
-                }),
-            ]
-        );
-
-        let _cfg_str = toml::to_string(&cfg).unwrap();
+    fn default() {
+        let cfg: Config = toml::from_str("").expect("failed to parse config");
+        assert_eq!(cfg, Default::default());
     }
 
     #[test]
-    fn names() {
-        let cfg: Config = toml::from_str(CONFIG).unwrap();
+    fn all() {
+        let cfg: Config = toml::from_str(
+            r#"
+steward = "https://example.com"
 
+args = [ "first", "2" ]
+
+[env]
+TEST = "test"
+
+[stdin]
+kind = "host"
+
+[stdout]
+kind = "null"
+
+[stderr]
+kind = "host"
+
+[listen.9000]
+prot = "tcp"
+
+[listen."::9001"]
+prot = "tls"
+
+[connect."tls.example.com"]
+prot = "tls"
+
+[connect."tcp.example.com"]
+prot = "tcp"
+"#,
+        )
+        .expect("failed to parse config");
         assert_eq!(
-            vec!["stdin", "X", "stdout", "null", "stderr", "example.com"],
-            cfg.files.iter().map(|f| f.name()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn invalid_name() {
-        const CONFIG: &str = r#"
-        [[files]]
-        name = "test:"
-        kind = "null"
-        "#;
-
-        let err = toml::from_str::<Config>(CONFIG).unwrap_err();
-        assert_eq!(err.line_col(), Some((1, 8)));
-        assert_eq!(
-            err.to_string(),
-            "file name must not contain ':' for key `files` at line 2 column 9"
+            cfg,
+            Config {
+                steward: Some("https://example.com".parse().unwrap()),
+                args: vec!["first".into(), "2".into()],
+                env: vec![("TEST".into(), "test".into())].into_iter().collect(),
+                stdin: StdioFile::Host,
+                stdout: StdioFile::Null,
+                stderr: StdioFile::Host,
+                listen: vec![
+                    ("9000".parse().unwrap(), ListenFile::Tcp),
+                    ("::9001".parse().unwrap(), ListenFile::Tls)
+                ]
+                .into_iter()
+                .collect(),
+                connect: vec![
+                    ("tls.example.com".parse().unwrap(), ConnectFile::Tls),
+                    ("tcp.example.com".parse().unwrap(), ConnectFile::Tcp)
+                ]
+                .into_iter()
+                .collect(),
+            }
         );
     }
 
     #[test]
-    fn check_template() {
-        let cfg_str = CONFIG_TEMPLATE
-            .lines()
-            .map(|l| l.trim_start_matches("# "))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let cfg: Config = toml::from_str(&cfg_str).unwrap();
-        let cfg_str = toml::to_string(&cfg).unwrap();
-        let cfg2: Config = toml::from_str(&cfg_str).unwrap();
-        assert_eq!(cfg, cfg2);
+    fn template() {
+        let cfg: Config = toml::from_str(CONFIG_TEMPLATE).expect("failed to parse config template");
+        let buf = toml::to_string(&cfg).expect("failed to reencode config template");
+        assert_eq!(
+            toml::from_str::<Config>(&buf).expect("failed to parse reencoded config template"),
+            cfg
+        );
     }
 }
