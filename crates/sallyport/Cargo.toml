@@ -13,7 +13,7 @@ categories = ["no-std"]
 doc = ["dep:gdbstub"]
 
 [dependencies]
-goblin = { version = "0.5", features = ["elf64"], default-features = false }
+goblin = { version = "0.6", features = ["elf64"], default-features = false }
 
 # optional dependencies
 gdbstub = { version = "0.6", optional = true, default-features = false }
