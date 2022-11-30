@@ -1210,7 +1210,7 @@ dependencies = [
  "protobuf-codegen-pure",
  "rand 0.8.5",
  "ring",
- "rsa 0.6.1",
+ "rsa 0.7.2",
  "rustls",
  "rustls-pemfile",
  "sallyport",
@@ -3040,9 +3040,9 @@ dependencies = [
 
 [[package]]
 name = "rsa"
-version = "0.7.0-rc.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "981bbf816bc9b572f90289a88a40fece97d096e68f3f26d7c0c45cf1f1c65790"
+checksum = "094052d5470cbcef561cb848a7209968c9f12dfa6d668f4bca048ac5de51099c"
 dependencies = [
  "byteorder",
  "digest 0.10.5",
@@ -3463,9 +3463,9 @@ dependencies = [
 
 [[package]]
 name = "signature"
-version = "1.6.3"
+version = "1.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "deb766570a2825fa972bceff0d195727876a9cdf2460ab2e52d455dc2de47fd9"
+checksum = "74233d3b3b2f6d4b006dc19dee745e73e2a6bfb6f93607cd3b02bd5b00797d7c"
 dependencies = [
  "digest 0.10.5",
  "rand_core 0.6.4",
@@ -4314,7 +4314,7 @@ dependencies = [
  "p256",
  "p384",
  "rand 0.8.5",
- "rsa 0.7.0-rc.1",
+ "rsa 0.7.2",
  "sha2 0.10.6",
  "signature",
  "uuid",
