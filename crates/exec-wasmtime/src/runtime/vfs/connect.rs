@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use cap_std::net::TcpStream;
-use enarx_config::{ConnectFile, FileName};
+use enarx_config::{ConnectFile, FileName, OutgoingNetwork};
 use rustls::{Certificate, PrivateKey, RootCertStore};
 use wasi_common::file::{FdFlags, FileType};
 use wasi_common::{Error, ErrorExt, WasiDir, WasiFile};
@@ -125,6 +125,7 @@ pub async fn new(
     certs: Arc<Vec<Certificate>>,
     key: Arc<Zeroizing<Vec<u8>>>,
     streams: impl IntoIterator<Item = (FileName, ConnectFile)>,
+    network: OutgoingNetwork,
 ) -> anyhow::Result<Arc<dyn Node>> {
     let certs = certs.deref().clone();
     let key = PrivateKey(key.deref().deref().clone());
@@ -144,15 +145,27 @@ pub async fn new(
         .with_single_cert(certs, key)
         .map(Arc::new)
         .context("failed to construct TLS config")?;
+    // NOTE: This will change significantly as part of https://github.com/enarx/enarx/issues/2367
     let dir = Directory::device(parent, {
-        let tls_config = tls_config.clone();
-        Some(Arc::new(move |parent: Arc<dyn Node>| {
-            let id = parent.id().device().create_inode();
-            let parent = Arc::downgrade(&parent);
-            let data = Data::from(tls_config.clone()).into();
-            let inode = Inode { data, id }.into();
-            Arc::new(Socket::Tls(Link { parent, inode }))
-        }))
+        match network.default {
+            ConnectFile::Tls => {
+                let tls_config = tls_config.clone();
+                Some(Arc::new(move |parent: Arc<dyn Node>| {
+                    let id = parent.id().device().create_inode();
+                    let parent = Arc::downgrade(&parent);
+                    let data = Data::from(tls_config.clone()).into();
+                    let inode = Inode { data, id }.into();
+                    Arc::new(Socket::Tls(Link { parent, inode }))
+                }))
+            }
+            ConnectFile::Tcp => Some(Arc::new(move |parent: Arc<dyn Node>| {
+                let id = parent.id().device().create_inode();
+                let parent = Arc::downgrade(&parent);
+                let data = Data::from(()).into();
+                let inode = Inode { data, id }.into();
+                Arc::new(Socket::Tcp(Link { parent, inode }))
+            })),
+        }
     });
     for (name, file) in streams {
         let parent = Arc::downgrade(&(dir.clone() as Arc<dyn Node>));

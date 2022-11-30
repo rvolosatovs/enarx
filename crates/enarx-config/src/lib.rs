@@ -92,24 +92,111 @@ pub struct Config {
     /// Standard error file. Null by default.
     pub stderr: StdioFile,
 
-    /// Pre-defined listening sockets
+    /// Pre-defined listening sockets.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(default)]
     pub listen: HashMap<FileName, ListenFile>,
 
-    /// Pre-defined connected streams
+    /// Pre-defined connected streams.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(default)]
     pub connect: HashMap<FileName, ConnectFile>,
+
+    /// Network policy.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
+    #[serde(default)]
+    pub network: Network,
 }
 
-/// File descriptor of a listen socket
+/// Incoming network connection policy.
+///
+/// This API is highly experimental and will change significantly in the future.
+/// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+/// feature is important for you.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncomingNetwork {
+    /// Default incoming network connection policy.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
+    #[serde(default)]
+    pub default: ListenFile,
+}
+
+/// Outgoing network connection policy.
+///
+/// This API is highly experimental and will change significantly in the future.
+/// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+/// feature is important for you.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutgoingNetwork {
+    /// Default outgoing network connection policy.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
+    #[serde(default)]
+    pub default: ConnectFile,
+}
+
+/// Network policy.
+///
+/// This API is highly experimental and will change significantly in the future.
+/// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+/// feature is important for you.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Network {
+    /// Incoming network connection policy.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
+    #[serde(default)]
+    pub incoming: IncomingNetwork,
+
+    /// Outgoing network connection policy
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
+    #[serde(default)]
+    pub outgoing: OutgoingNetwork,
+}
+
+/// File descriptor of a listen socket.
+///
+/// This API is highly experimental and will change significantly in the future.
+/// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+/// feature is important for you.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "prot", deny_unknown_fields)]
 pub enum ListenFile {
-    /// TLS listen socket
+    /// TLS listen socket.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(rename = "tls")]
     Tls,
 
-    /// TCP listen socket
+    /// TCP listen socket.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(rename = "tcp")]
     Tcp,
 }
@@ -120,15 +207,27 @@ impl Default for ListenFile {
     }
 }
 
-/// File descriptor of a stream socket
+/// File descriptor of a stream socket.
+///
+/// This API is highly experimental and will change significantly in the future.
+/// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+/// feature is important for you.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "prot", deny_unknown_fields)]
 pub enum ConnectFile {
-    /// TLS stream socket
+    /// TLS stream socket.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(rename = "tls")]
     Tls,
 
-    /// TCP stream socket
+    /// TCP stream socket.
+    ///
+    /// This API is highly experimental and will change significantly in the future.
+    /// Please track https://github.com/enarx/enarx/issues/2367 and provide feedback if this
+    /// feature is important for you.
     #[serde(rename = "tcp")]
     Tcp,
 }
@@ -199,6 +298,12 @@ prot = "tls"
 
 [connect."tcp.example.com"]
 prot = "tcp"
+
+[network.incoming.default]
+prot = "tcp"
+
+[network.outgoing.default]
+prot = "tls"
 "#,
         )
         .expect("failed to parse config");
@@ -223,6 +328,12 @@ prot = "tcp"
                 ]
                 .into_iter()
                 .collect(),
+                network: Network {
+                    incoming: IncomingNetwork {
+                        default: ListenFile::Tcp,
+                    },
+                    ..Default::default()
+                },
             }
         );
     }

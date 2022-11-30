@@ -336,6 +336,9 @@ kind = "host"
 kind = "host"
 
 [connect."{}:{port_pre}"]
+prot = "tcp"
+
+[network.outgoing.default]
 prot = "tcp""#,
         Ipv4Addr::LOCALHOST,
     )
@@ -486,6 +489,9 @@ kind = "host"
 prot = "tcp"
 
 [connect."{}:{}"]
+prot = "tcp"
+
+[network.incoming.default]
 prot = "tcp""#,
         Ipv4Addr::LOCALHOST,
         listener.local_addr().unwrap().port()

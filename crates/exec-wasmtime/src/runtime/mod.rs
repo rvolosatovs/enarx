@@ -53,6 +53,7 @@ impl Runtime {
             stderr,
             listen,
             connect,
+            network,
         } = config.unwrap_or_default();
 
         let certs = if let Some(url) = steward {
@@ -109,9 +110,16 @@ impl Runtime {
         // `/net`
         {
             let netfs = Directory::new(root.clone(), None);
-            let listen =
-                vfs::listen::new(netfs.clone(), certs.clone(), prvkey.clone(), listen).await?;
-            let connect = vfs::connect::new(netfs.clone(), certs, prvkey, connect).await?;
+            let listen = vfs::listen::new(
+                netfs.clone(),
+                certs.clone(),
+                prvkey.clone(),
+                listen,
+                network.incoming,
+            )
+            .await?;
+            let connect =
+                vfs::connect::new(netfs.clone(), certs, prvkey, connect, network.outgoing).await?;
             netfs
                 .attach("lis", listen)
                 .await
