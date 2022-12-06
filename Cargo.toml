@@ -104,26 +104,6 @@ drawbridge-server = { workspace = true }
 futures = { workspace = true }
 http-types = { workspace = true }
 
-[profile.release]
-codegen-units = 1
-lto = true
-strip = true
-
-[profile.dev.package.rcrt1]
-opt-level = 3
-
-[profile.release.package.enarx-exec-wasmtime]
-overflow-checks = true
-
-[profile.release.package.enarx-shim-kvm]
-overflow-checks = true
-
-[profile.release.package.enarx-shim-sgx]
-overflow-checks = true
-
-[profile.release.package.sallyport]
-overflow-checks = true
-
 [workspace]
 members = ["crates/*"]
 exclude = ["tests/crates"]
