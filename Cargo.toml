@@ -112,9 +112,6 @@ strip = true
 [profile.dev.package.rcrt1]
 opt-level = 3
 
-[profile.dev.package.num-bigint-dig]
-opt-level = 3
-
 [profile.release.package.enarx-exec-wasmtime]
 overflow-checks = true
 
