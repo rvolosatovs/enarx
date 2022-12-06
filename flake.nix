@@ -1,7 +1,7 @@
 {
   description = "Tools for deploying WebAssembly into Enarx Keeps.";
 
-  inputs.nixify.url = github:rvolosatovs/nixify/build/update;
+  inputs.nixify.url = github:rvolosatovs/nixify/test;
 
   outputs = {nixify, ...}: let
   in
