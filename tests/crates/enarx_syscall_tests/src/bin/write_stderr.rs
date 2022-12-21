@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![cfg(target_vendor = "unknown")]
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 
 enarx_syscall_tests::startup!();
 
-use enarx_syscall_tests::*;
+#[cfg(target_vendor = "unknown")]
+fn main() -> enarx_syscall_tests::Result<()> {
+    use enarx_syscall_tests::*;
 
-fn main() -> Result<()> {
     let out = b"hi\n";
     let len = write(libc::STDERR_FILENO, out.as_ptr(), out.len())?;
     if len as usize == out.len() {
@@ -15,4 +17,9 @@ fn main() -> Result<()> {
     } else {
         Err(1)
     }
+}
+
+#[cfg(not(target_vendor = "unknown"))]
+fn main() {
+    panic!("unsupported on this target")
 }

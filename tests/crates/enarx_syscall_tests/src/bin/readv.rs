@@ -5,9 +5,10 @@
 
 enarx_syscall_tests::startup!();
 
-use enarx_syscall_tests::*;
+#[cfg(target_vendor = "unknown")]
+fn main() -> enarx_syscall_tests::Result<()> {
+    use enarx_syscall_tests::*;
 
-fn main() -> Result<()> {
     /* sizeof("hello, world") = 12 (note: no NUL byte) */
     let mut a = [0u8; 12];
     let mut b = [0u8; 12];
@@ -38,4 +39,9 @@ fn main() -> Result<()> {
     write(libc::STDOUT_FILENO, c.as_ptr(), c.len() as _)?;
 
     Ok(())
+}
+
+#[cfg(not(target_vendor = "unknown"))]
+fn main() {
+    panic!("unsupported on this target")
 }

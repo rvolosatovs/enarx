@@ -8,9 +8,10 @@
 
 enarx_syscall_tests::startup!();
 
-use enarx_syscall_tests::*;
+#[cfg(target_vendor = "unknown")]
+fn main() -> enarx_syscall_tests::Result<()> {
+    use enarx_syscall_tests::*;
 
-fn main() -> Result<()> {
     let mut buf = [0u8; 65507];
     let out = read(libc::STDIN_FILENO, &mut buf as _, buf.len())? as usize;
     if out != buf.len() {
@@ -23,4 +24,9 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(target_vendor = "unknown"))]
+fn main() {
+    panic!("unsupported on this target")
 }
