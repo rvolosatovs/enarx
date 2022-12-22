@@ -5,10 +5,9 @@
 
 enarx_syscall_tests::startup!();
 
-#[cfg(target_vendor = "unknown")]
-fn main() -> enarx_syscall_tests::Result<()> {
-    use enarx_syscall_tests::*;
+use enarx_syscall_tests::*;
 
+fn main() -> Result<()> {
     let out = b"hi\n";
     let len = write(libc::STDOUT_FILENO, out.as_ptr(), out.len())?;
     if len as usize == out.len() {
@@ -16,9 +15,4 @@ fn main() -> enarx_syscall_tests::Result<()> {
     } else {
         Err(1)
     }
-}
-
-#[cfg(not(target_vendor = "unknown"))]
-fn main() {
-    panic!("unsupported on this target")
 }

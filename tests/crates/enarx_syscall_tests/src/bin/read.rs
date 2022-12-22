@@ -5,10 +5,9 @@
 
 enarx_syscall_tests::startup!();
 
-#[cfg(target_vendor = "unknown")]
-fn main() -> enarx_syscall_tests::Result<()> {
-    use enarx_syscall_tests::*;
+use enarx_syscall_tests::*;
 
+fn main() -> Result<()> {
     let mut buf = [0u8; 16];
     let mut in_len = 1;
 
@@ -21,9 +20,4 @@ fn main() -> enarx_syscall_tests::Result<()> {
         in_len = buf.len().min(in_len * 2);
     }
     Ok(())
-}
-
-#[cfg(not(target_vendor = "unknown"))]
-fn main() {
-    panic!("unsupported on this target")
 }

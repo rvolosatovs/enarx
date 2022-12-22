@@ -92,7 +92,6 @@ pub fn get_att_syscall(
     Ok((rax as _, tech))
 }
 
-#[cfg(unix)]
 fn main() -> std::io::Result<()> {
     let (len, tech) = get_att_syscall(None, None)?;
 
@@ -131,9 +130,4 @@ fn main() -> std::io::Result<()> {
     assert!(qe_cert_data_type == 5);
 
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn main() {
-    panic!("unsupported on this target")
 }

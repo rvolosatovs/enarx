@@ -11,10 +11,9 @@
 
 enarx_syscall_tests::startup!();
 
-#[cfg(target_vendor = "unknown")]
-fn main() -> enarx_syscall_tests::Result<()> {
-    use enarx_syscall_tests::*;
+use enarx_syscall_tests::*;
 
+fn main() -> Result<()> {
     if !is_enarx() {
         return Ok(());
     }
@@ -55,9 +54,4 @@ fn main() -> enarx_syscall_tests::Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(not(target_vendor = "unknown"))]
-fn main() {
-    panic!("unsupported on this target")
 }

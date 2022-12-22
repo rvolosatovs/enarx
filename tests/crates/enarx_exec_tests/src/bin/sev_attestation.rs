@@ -2,7 +2,11 @@
 
 use enarx_exec_tests::musl_fsbase_fix;
 
+use std::arch::asm;
 use std::convert::TryFrom;
+use std::mem::size_of;
+
+use sallyport::item::enarxcall::SYS_GETATT;
 
 musl_fsbase_fix!();
 
@@ -153,9 +157,9 @@ pub fn get_att_syscall(
     };
 
     unsafe {
-        std::arch::asm!(
+        asm!(
             "syscall",
-            inlateout("rax") sallyport::item::enarxcall::SYS_GETATT => rax,
+            inlateout("rax") SYS_GETATT => rax,
             in("rdi") arg0,
             in("rsi") arg1,
             inlateout("rdx") arg2 => rdx,
@@ -177,7 +181,6 @@ pub fn get_att_syscall(
     Ok((rax as _, tech))
 }
 
-#[cfg(unix)]
 fn main() {
     get_att([
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
@@ -187,11 +190,6 @@ fn main() {
         0x3C, 0x3D, 0x3E, 0x3F,
     ])
     .unwrap()
-}
-
-#[cfg(not(unix))]
-fn main() {
-    panic!("unsupported on this target")
 }
 
 const ASN_SECTION_CONSTRUCTED: u8 = 0x30;
@@ -240,8 +238,6 @@ fn asn_len_header_len(len: usize) -> Option<usize> {
 }
 
 fn get_att(mut nonce: [u8; 64]) -> std::io::Result<()> {
-    use std::mem::size_of;
-
     let (len, tech) = get_att_syscall(None, None)?;
     assert!(matches!(tech, TeeTech::Sev));
 
