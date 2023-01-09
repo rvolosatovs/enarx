@@ -46,6 +46,16 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| format!("failed to connect to `[{}]:{port}`", Ipv6Addr::LOCALHOST))?;
     assert_stream(stream).context("failed to assert IPv6 connectivity")?;
 
+    eprintln!("[guest] connecting to `localhost:{port}`");
+    let stream = File::options()
+        .read(true)
+        .write(true)
+        .open(format!("/net/con/localhost:{port}"))
+        .map(OwnedFd::from)
+        .map(TcpStream::from)
+        .with_context(|| format!("failed to connect to `locahost:{port}`"))?;
+    assert_stream(stream).context("failed to assert localhost connectivity")?;
+
     Ok(())
 }
 

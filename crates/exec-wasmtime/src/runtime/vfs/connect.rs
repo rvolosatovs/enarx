@@ -8,6 +8,7 @@ use super::super::WasiResult;
 use std::any::Any;
 use std::fmt::Debug;
 use std::io::{IoSlice, IoSliceMut, SeekFrom};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use anyhow::Context;
 use cap_std::net::TcpStream;
 use enarx_config::OutgoingNetwork;
 use rustls::{Certificate, PrivateKey, RootCertStore};
+use url::Host;
 use wasi_common::dir::{ReaddirCursor, ReaddirEntity};
 use wasi_common::file::{Advice, FdFlags, FileType, Filestat, OFlags};
 use wasi_common::{Error, ErrorExt, SystemTimeSpec, WasiDir, WasiFile};
@@ -232,20 +234,33 @@ impl WasiDir for OpenConnect {
                 let policy = state.policy.get(&addr);
 
                 use enarx_config::Outgoing::{Tcp, Tls};
-                let addr = match (addr.port, policy) {
-                    (Some(_), _) => addr.to_string(),
-                    (None, Tcp) => format!("{addr}:80"),
-                    (None, Tls) => format!("{addr}:443"),
+
+                let port = match (addr.port, policy) {
+                    (Some(port), _) => port.into(),
+                    (None, Tcp) => 80,
+                    (None, Tls) => 443,
                 };
                 // TODO: Handle DNS in the keep
                 // https://github.com/enarx/enarx/issues/1511
-                let tcp = std::net::TcpStream::connect(&addr)
-                    .map(TcpStream::from_std)
-                    .map_err(|e| {
-                        Error::io()
-                            .context(e)
-                            .context(format!("failed to connect to `{addr}`"))
-                    })?;
+                let tcp = match addr.host {
+                    Host::Domain(ref domain) if domain == "localhost" => {
+                        std::net::TcpStream::connect(
+                            [
+                                SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+                                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                            ]
+                            .as_slice(),
+                        )
+                    }
+                    Host::Domain(ref domain) => {
+                        std::net::TcpStream::connect((domain.as_str(), port))
+                    }
+                    Host::Ipv4(addr) => std::net::TcpStream::connect((addr, port)),
+                    Host::Ipv6(addr) => std::net::TcpStream::connect((addr, port)),
+                }
+                .map(TcpStream::from_std)
+                .map_err(|e| Error::io().context(e))
+                .with_context(|| format!("failed to connect to `{addr}`"))?;
                 if flags == FdFlags::NONBLOCK {
                     tcp.set_nonblocking(true)
                         .context("failed to enable NONBLOCK")?;
@@ -258,9 +273,8 @@ impl WasiDir for OpenConnect {
                 }
                 match policy {
                     Tcp => Ok(wasmtime_wasi::net::Socket::from(tcp).into()),
-                    Tls => {
-                        tls::Stream::connect(tcp, addr, state.tls_config.clone()).map(Into::into)
-                    }
+                    Tls => tls::Stream::connect(tcp, addr.to_string(), state.tls_config.clone())
+                        .map(Into::into),
                 }
             }
         }

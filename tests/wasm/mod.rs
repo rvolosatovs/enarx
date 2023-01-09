@@ -330,6 +330,9 @@ prot = "tcp"
 
 [network.outgoing."[{}]"]
 prot = "tcp"
+
+[network.outgoing.localhost]
+prot = "tcp"
 "#,
         Ipv4Addr::LOCALHOST,
         Ipv6Addr::LOCALHOST,
@@ -354,6 +357,12 @@ prot = "tcp"
                 .accept()
                 .expect("failed to accept IPv6 connectivity");
             assert_stream(stream).expect("failed to assert IPv6 connectivity");
+
+            eprintln!("[host] asserting localhost connectivity");
+            let (stream, _) = listener
+                .accept()
+                .expect("failed to accept localhost connectivity");
+            assert_stream(stream).expect("failed to assert localhost connectivity");
         })
         .expect("failed to start server thread");
     check_output(&enarx_run(&wasm, Some(conf.path()), None), 0, None, None);
