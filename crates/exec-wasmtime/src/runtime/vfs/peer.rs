@@ -1,26 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! A file system providing outgoing network connectivity.
+//! A file system providing incoming network connectivity.
 
-use super::super::identity::Peer;
-use super::super::net::{tls, ConnectMetadata};
+use super::super::io::blob::Blob;
+use super::super::net::{AcceptMetadata, ConnectMetadata};
 use super::super::WasiResult;
 
 use std::any::Any;
 use std::fmt::Debug;
 use std::io::{IoSlice, IoSliceMut, SeekFrom};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
-use anyhow::Context;
-use cap_std::net::TcpStream;
-use enarx_config::OutgoingNetwork;
-use rustls::client::{ServerCertVerified, ServerCertVerifier};
-use rustls::{Certificate, PrivateKey};
-use std::sync::mpsc;
-use url::Host;
 use wasi_common::dir::{ReaddirCursor, ReaddirEntity};
 use wasi_common::file::{Advice, FdFlags, FileType, Filestat, OFlags};
 use wasi_common::{Error, ErrorExt, SystemTimeSpec, WasiDir, WasiFile};
@@ -28,65 +20,33 @@ use wasmtime_vfs_ledger::InodeId;
 use wasmtime_vfs_memory::{Data, Inode, Link, Node, Open, State};
 use wiggle::async_trait;
 use wiggle::tracing::instrument;
-use zeroize::Zeroizing;
 
 // NOTE: Directory-specific functionality is duplicated from `wasmtime_vfs_dir::Directory`
 // implementation. There should be a better API provided to handle this.
 
-#[derive(Debug)]
-pub struct ConnectState {
-    policy: OutgoingNetwork,
-    tls_config: Arc<rustls::ClientConfig>,
-    connected: Mutex<mpsc::Sender<ConnectMetadata>>,
+pub struct PeerState {
+    accepted: Mutex<mpsc::Receiver<AcceptMetadata>>,
+    connected: Mutex<mpsc::Receiver<ConnectMetadata>>,
 }
 
-struct NoopCertVerifier;
+pub struct Peer(Link<PeerState>);
 
-impl ServerCertVerifier for NoopCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _: &Certificate,
-        _: &[Certificate],
-        _: &rustls::ServerName,
-        _: &mut dyn Iterator<Item = &[u8]>,
-        _: &[u8],
-        _: std::time::SystemTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-}
-
-pub struct Connect(Link<ConnectState>);
-
-impl Connect {
+impl Peer {
     #[instrument(skip(parent))]
-    pub async fn new(
+    pub fn new(
         parent: Arc<dyn Node>,
-        certs: Arc<Vec<Certificate>>,
-        key: Arc<Zeroizing<Vec<u8>>>,
-        policy: OutgoingNetwork,
-    ) -> anyhow::Result<(Arc<dyn Node>, mpsc::Receiver<ConnectMetadata>)> {
-        let certs = certs.deref().clone();
-        let key = PrivateKey(key.deref().deref().clone());
-        let tls_config = rustls::ClientConfig::builder()
-            .with_cipher_suites(tls::DEFAULT_CIPHER_SUITES.deref())
-            .with_kx_groups(tls::DEFAULT_KX_GROUPS.deref())
-            .with_protocol_versions(tls::DEFAULT_PROTOCOL_VERSIONS.deref())?
-            .with_custom_certificate_verifier(Arc::new(NoopCertVerifier))
-            .with_single_cert(certs, key)
-            .map(Arc::new)
-            .context("failed to construct TLS config")?;
+        accepted: mpsc::Receiver<AcceptMetadata>,
+        connected: mpsc::Receiver<ConnectMetadata>,
+    ) -> Arc<dyn Node> {
         let id = parent.id().device().create_inode();
         let parent = Arc::downgrade(&parent);
-        let (connected, connected_rx) = mpsc::channel();
-        let data = Data::from(ConnectState {
-            tls_config,
-            policy,
+        let data = Data::from(PeerState {
+            accepted: accepted.into(),
             connected: connected.into(),
         })
         .into();
         let inode = Inode { data, id }.into();
-        Ok((Arc::new(Self(Link { parent, inode })), connected_rx))
+        Arc::new(Self(Link { parent, inode }))
     }
 
     fn prev(self: &Arc<Self>) -> Arc<dyn Node> {
@@ -97,28 +57,28 @@ impl Connect {
     }
 }
 
-impl Deref for Connect {
-    type Target = Link<ConnectState>;
+impl Deref for Peer {
+    type Target = Link<PeerState>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for Connect {
+impl DerefMut for Peer {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl Debug for Connect {
+impl Debug for Peer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Connect").finish()
+        f.debug_tuple("Peer").finish()
     }
 }
 
 #[async_trait]
-impl Node for Connect {
+impl Node for Peer {
     fn to_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
     }
@@ -137,7 +97,7 @@ impl Node for Connect {
 
     #[instrument]
     async fn open_dir(self: Arc<Self>) -> WasiResult<Box<dyn WasiDir>> {
-        Ok(Box::new(OpenConnect(Open {
+        Ok(Box::new(OpenPeer(Open {
             root: self.root(),
             link: self,
             state: State::default().into(),
@@ -156,7 +116,7 @@ impl Node for Connect {
         flags: FdFlags,
     ) -> WasiResult<Box<dyn WasiFile>> {
         match path {
-            "" | "." => Ok(Box::new(OpenConnect(Open {
+            "" | "." => Ok(Box::new(OpenPeer(Open {
                 root: self.root(),
                 link: self,
                 state: State::from(flags).into(),
@@ -168,24 +128,24 @@ impl Node for Connect {
     }
 }
 
-struct OpenConnect(Open<Connect>);
+struct OpenPeer(Open<Peer>);
 
-impl Deref for OpenConnect {
-    type Target = Open<Connect>;
+impl Deref for OpenPeer {
+    type Target = Open<Peer>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl Debug for OpenConnect {
+impl Debug for OpenPeer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("OpenConnect").finish()
+        f.debug_tuple("OpenPeer").finish()
     }
 }
 
 #[async_trait]
-impl WasiDir for OpenConnect {
+impl WasiDir for OpenPeer {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -246,81 +206,28 @@ impl WasiDir for OpenConnect {
                 link.open_file(path, odir, read, write, flags).await
             }
 
-            addr => {
-                let addr = addr
-                    .parse()
-                    .map_err(|e| Error::invalid_argument().context(e))
-                    .context("failed to parse address")?;
+            "con" => {
                 let state = &mut self.link.inode.data.write().await.content;
-                let policy = state.policy.get(&addr);
-
-                use enarx_config::Outgoing::{Tcp, Tls};
-
-                let port = match (addr.port, policy) {
-                    (Some(port), _) => port.into(),
-                    (None, Tcp) => 80,
-                    (None, Tls) => 443,
-                };
-                // TODO: Handle DNS in the keep
-                // https://github.com/enarx/enarx/issues/1511
-                let tcp = match addr.host {
-                    Host::Domain(ref domain) if domain == "localhost" => {
-                        std::net::TcpStream::connect(
-                            [
-                                SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
-                                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-                            ]
-                            .as_slice(),
-                        )
-                    }
-                    Host::Domain(ref domain) => {
-                        std::net::TcpStream::connect((domain.as_str(), port))
-                    }
-                    Host::Ipv4(addr) => std::net::TcpStream::connect((addr, port)),
-                    Host::Ipv6(addr) => std::net::TcpStream::connect((addr, port)),
-                }
-                .map(TcpStream::from_std)
-                .map_err(|e| Error::io().context(e))
-                .with_context(|| format!("failed to connect to `{addr}`"))?;
-                if flags == FdFlags::NONBLOCK {
-                    tcp.set_nonblocking(true)
-                        .context("failed to enable NONBLOCK")?;
-                } else if flags.is_empty() {
-                    tcp.set_nonblocking(false)
-                        .context("failed to disable NONBLOCK")?;
-                } else {
-                    return Err(Error::invalid_argument()
-                        .context("cannot set anything other than NONBLOCK"));
-                }
-                let (stream, peer) = match policy {
-                    Tcp => (
-                        wasmtime_wasi::net::Socket::from(tcp).into(),
-                        Peer::Anonymous,
-                    ),
-                    Tls => {
-                        let stream = tls::Stream::connect(
-                            tcp,
-                            addr.host.to_string(),
-                            state.tls_config.clone(),
-                        )
-                        .context("failed to estabilsh TLS connection")?;
-                        let peer = Peer::from_certs(stream.peer_certificates())
-                            .map_err(|e| Error::io().context(e))?;
-                        (stream.into(), peer)
-                    }
-                };
-                state
+                let md = state
                     .connected
                     .lock()
                     .expect("failed to lock")
-                    .send(ConnectMetadata {
-                        host: addr.host,
-                        port,
-                        peer,
-                    })
-                    .expect("");
-                Ok(stream)
+                    .recv()
+                    .expect("failed to receive connection event");
+                Ok(Box::new(Blob::from(serde_json::to_string(&md).unwrap())))
             }
+
+            "lis" => {
+                let state = &mut self.link.inode.data.write().await.content;
+                let md = state
+                    .accepted
+                    .lock()
+                    .expect("failed to lock")
+                    .recv()
+                    .expect("failed to receive listener open event");
+                Ok(Box::new(Blob::from(serde_json::to_string(&md).unwrap())))
+            }
+            _ => todo!(),
         }
     }
 
@@ -474,7 +381,7 @@ impl WasiDir for OpenConnect {
 }
 
 #[async_trait]
-impl WasiFile for OpenConnect {
+impl WasiFile for OpenPeer {
     fn as_any(&self) -> &dyn Any {
         self
     }

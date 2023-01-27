@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use enarx_config::{Config, StdioFile};
-use once_cell::sync::Lazy;
+
 use wasmtime::{Engine, Linker, Module, Store, Trap, Val};
 use wasmtime_vfs_dir::Directory;
 use wasmtime_vfs_file::File;
@@ -32,10 +32,10 @@ impl Runtime {
     // Execute an Enarx [Package]
     #[instrument]
     pub async fn execute(package: Package) -> anyhow::Result<Vec<Val>> {
-        let (prvkey, crtreq) =
-            identity::generate().context("failed to generate a private key and CSR")?;
+        // TODO: request Steward URL, wdig and wsig from Drawbridge
+        // TODO: attest to Steward and acquire a certificate
 
-        let Workload { webasm, config } = package.try_into()?;
+        let Workload { content, digest } = package.clone().try_into()?;
         let Config {
             steward,
             args,
@@ -44,23 +44,27 @@ impl Runtime {
             stdout,
             stderr,
             network,
-        } = config.unwrap_or_default();
+        } = content.config.unwrap_or_default();
 
-        let certs = if let Some(url) = steward {
-            identity::steward(&url, crtreq).context("failed to attest to Steward")?
-        } else {
-            identity::selfsigned(&prvkey).context("failed to generate self-signed certificates")?
-        }
-        .into_iter()
-        .map(rustls::Certificate)
-        .collect::<Vec<_>>();
+        let (prvkey, crtreq) = identity::generate(&package, &digest)
+            .context("failed to generate a private key and CSR")?;
+        let certs = identity::selfsigned(&prvkey, &package, &digest)
+            .context("failed to generate self-signed certificates")?;
+
+        let certs = steward
+            .map(|url| identity::steward(&url, crtreq).context("failed to attest to Steward"))
+            .transpose()?
+            .unwrap_or(certs)
+            .into_iter()
+            .map(rustls::Certificate)
+            .collect::<Vec<_>>();
 
         let config = wasmtime::Config::new();
         let engine = trace_span!("initialize Wasmtime engine")
             .in_scope(|| Engine::new(&config))
             .context("failed to create execution engine")?;
         let module = trace_span!("compile Wasm")
-            .in_scope(|| Module::from_binary(&engine, &webasm))
+            .in_scope(|| Module::from_binary(&engine, &content.webasm))
             .context("failed to compile Wasm module")?;
         let mut linker = trace_span!("setup linker").in_scope(|| Linker::new(&engine));
         trace_span!("link WASI")
@@ -114,14 +118,18 @@ impl Runtime {
         // `/net`
         {
             let netfs = Directory::new(root.clone(), None);
-            let listen = vfs::Listen::new(
+            let (listen, accepted) = vfs::Listen::new(
                 netfs.clone(),
                 certs.clone(),
                 prvkey.clone(),
                 network.incoming,
             )
             .await?;
-            let connect = vfs::Connect::new(netfs.clone(), certs, prvkey, network.outgoing).await?;
+            let (connect, connected) =
+                vfs::Connect::new(netfs.clone(), certs, prvkey, network.outgoing).await?;
+
+            let peer = vfs::Peer::new(netfs.clone(), accepted, connected);
+
             netfs
                 .attach("lis", listen)
                 .await
@@ -130,6 +138,10 @@ impl Runtime {
                 .attach("con", connect)
                 .await
                 .context("failed to attach /net/con")?;
+            netfs
+                .attach("peer", peer)
+                .await
+                .context("failed to attach /net/peer")?;
             root.attach("net", netfs)
                 .await
                 .context("failed to attach `/net`")?;

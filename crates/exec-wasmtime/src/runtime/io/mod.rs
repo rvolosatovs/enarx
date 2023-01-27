@@ -2,5 +2,6 @@
 
 //! I/O functionality for keeps
 
+pub mod blob;
 pub mod null;
 pub mod urandom;

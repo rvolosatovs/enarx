@@ -223,10 +223,8 @@ pub async fn init_drawbridge(oidc_url: String) -> (u16, Sender<()>, JoinHandle<(
             store.path(),
             tls,
             OidcConfig {
-                label: "test-label".into(),
+                audience: "test-label".into(),
                 issuer: oidc_url.parse().unwrap(),
-                client_id: "4NuaJxkQv8EZBeJKE56R57gKJbxrTLG2".into(),
-                client_secret: None,
             },
         )
         .await

@@ -4,8 +4,10 @@
 
 mod connect;
 mod listen;
+mod peer;
 
 pub mod dev;
 
 pub use connect::Connect;
 pub use listen::Listen;
+pub use peer::Peer;

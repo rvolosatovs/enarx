@@ -61,7 +61,7 @@ impl WasiFile for Urandom {
     }
 
     async fn read_vectored<'a>(&mut self, bufs: &mut [io::IoSliceMut<'a>]) -> WasiResult<u64> {
-        bufs.into_iter().try_fold(0, |sum, buf| {
+        bufs.iter_mut().try_fold(0, |sum, buf| {
             let n = buf.len() as u64;
             Urandom.read_exact(buf)?;
             Ok(sum + n)

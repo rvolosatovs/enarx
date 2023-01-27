@@ -5,35 +5,108 @@
 mod pki;
 mod platform;
 
+use super::super::{Package, PackageSpec};
+
 use pki::PrivateKeyInfoExt;
 use platform::{Platform, Technology};
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use const_oid::db::rfc4519::COMMON_NAME;
 use const_oid::db::rfc5280::{
     ID_CE_BASIC_CONSTRAINTS, ID_CE_EXT_KEY_USAGE, ID_CE_KEY_USAGE, ID_KP_CLIENT_AUTH,
     ID_KP_SERVER_AUTH,
 };
 use const_oid::db::rfc5912::{SECP_256_R_1, SECP_384_R_1};
 use const_oid::AssociatedOid;
+use drawbridge_client::types::digest::{Algorithm, ContentDigest};
 use getrandom::getrandom;
 use pkcs8::PrivateKeyInfo;
+use serde::Serialize;
 use sha2::{Digest, Sha256, Sha384};
 use url::Url;
 use wiggle::tracing::instrument;
-use x509_cert::attr::Attribute;
+use x509_cert::attr::{Attribute, AttributeTypeAndValue};
 use x509_cert::der::asn1::{BitStringRef, UIntRef};
 use x509_cert::der::{AnyRef, Decode, Encode};
 use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages};
 use x509_cert::ext::Extension;
-use x509_cert::name::RdnSequence;
+use x509_cert::name::{RdnSequence, RelativeDistinguishedName};
 use x509_cert::request::{CertReq, CertReqInfo, ExtensionReq};
 use x509_cert::time::Validity;
 use x509_cert::{Certificate, PkiPath, TbsCertificate};
 use zeroize::Zeroizing;
 
-fn csr(pki: &PrivateKeyInfo<'_>, exts: Vec<Extension<'_>>) -> anyhow::Result<Vec<u8>> {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum Peer {
+    #[serde(rename = "anonymous")]
+    Anonymous,
+    #[serde(rename = "local")]
+    Local { digest: String },
+    #[serde(rename = "keep")]
+    Keep { workload: String, digest: String },
+}
+
+impl Peer {
+    pub fn from_certs(certs: impl IntoIterator<Item = impl AsRef<[u8]>>) -> anyhow::Result<Self> {
+        let names = certs.into_iter().next().map(|cert| {
+            let cert = cert.as_ref();
+            let Certificate {
+                tbs_certificate, ..
+            } = Certificate::from_der(cert).expect("failed to parse certificate");
+            // TODO: check signature
+            tbs_certificate
+                .subject
+                .0
+                .into_iter()
+                .flat_map(|RelativeDistinguishedName(rdn)| {
+                    rdn.into_vec()
+                        .into_iter()
+                        .filter_map(|AttributeTypeAndValue { oid, value }| {
+                            matches!(oid, COMMON_NAME).then(|| {
+                                value
+                                    .utf8_string()
+                                    .expect("common name is not a UTF-8 string")
+                                    .to_string()
+                            })
+                        })
+                })
+                .collect::<HashSet<_>>()
+        });
+        let mut names = if let Some(names) = names {
+            names.into_iter()
+        } else {
+            return Ok(Self::Anonymous);
+        };
+        let slug = if let Some(slug) = names.next() {
+            slug
+        } else {
+            return Ok(Self::Anonymous);
+        };
+        let (workload, digest) = slug.rsplit_once('@').unwrap();
+        let digest = digest.replace('-', "+").replace('_', "/");
+
+        // TODO: This should be based on signatures in the certificate chain
+        if workload == "localhost" {
+            Ok(Self::Local { digest })
+        } else {
+            Ok(Self::Keep {
+                workload: workload.into(),
+                digest,
+            })
+        }
+    }
+}
+
+fn csr(
+    pki: &PrivateKeyInfo<'_>,
+    exts: Vec<Extension<'_>>,
+    pkg: &Package,
+    wdig: &ContentDigest,
+) -> anyhow::Result<Vec<u8>> {
     // Request the extensions.
     let req = ExtensionReq::from(exts)
         .to_vec()
@@ -54,11 +127,30 @@ fn csr(pki: &PrivateKeyInfo<'_>, exts: Vec<Extension<'_>>) -> anyhow::Result<Vec
         .context("failed to generate CRI attributes")?;
     let public_key = pki.public_key().context("failed to extract public key")?;
 
+    let digest = wdig
+        .get(&Algorithm::Sha256)
+        .unwrap()
+        .to_string()
+        .trim_end_matches('=')
+        .to_string()
+        .replace('+', "-")
+        .replace('/', "_");
+
+    let subject = match pkg {
+        Package::Remote(PackageSpec::Slug(ref slug)) => format!("CN={slug}@{digest}"),
+        Package::Remote(PackageSpec::Url(ref url)) => format!("CN={url}@{digest}"),
+        Package::Local { .. } => format!("CN=localhost@{digest}"),
+    };
+    let subject = RdnSequence::encode_from_string(&subject)
+        .context("failed to encode RDN sequence to DER")?;
+    let subject =
+        RdnSequence::from_der(&subject).context("failed to parse RDN sequence from DER")?;
+
     // Create a certification request information structure.
     let info = CertReqInfo {
         version: x509_cert::request::Version::V1,
         attributes,
-        subject: RdnSequence::default(),
+        subject,
         public_key,
     };
 
@@ -83,7 +175,10 @@ fn csr(pki: &PrivateKeyInfo<'_>, exts: Vec<Extension<'_>>) -> anyhow::Result<Vec
 
 /// Generates a new private key and corresponding CSR
 #[instrument]
-pub fn generate() -> anyhow::Result<(Zeroizing<Vec<u8>>, Vec<u8>)> {
+pub fn generate(
+    pkg: &Package,
+    wdig: &ContentDigest,
+) -> anyhow::Result<(Zeroizing<Vec<u8>>, Vec<u8>)> {
     let platform = Platform::get().context("failed to query platform")?;
     let cert_algo = match platform.technology() {
         Technology::Snp => SECP_384_R_1,
@@ -119,7 +214,7 @@ pub fn generate() -> anyhow::Result<(Zeroizing<Vec<u8>>, Vec<u8>)> {
     }];
 
     // Make a certificate signing request.
-    let req = csr(&pki, ext).context("failed to generate a CSR")?;
+    let req = csr(&pki, ext, pkg, wdig).context("failed to generate a CSR")?;
 
     Ok((raw, req))
 }
@@ -145,11 +240,29 @@ pub fn steward(url: &Url, csr: impl AsRef<[u8]>) -> anyhow::Result<Vec<Vec<u8>>>
 }
 
 #[instrument(skip(key))]
-pub fn selfsigned(key: impl AsRef<[u8]>) -> anyhow::Result<Vec<Vec<u8>>> {
+pub fn selfsigned(
+    key: impl AsRef<[u8]>,
+    pkg: &Package,
+    wdig: &ContentDigest,
+) -> anyhow::Result<Vec<Vec<u8>>> {
     let pki = PrivateKeyInfo::from_der(key.as_ref())?;
 
+    let digest = wdig
+        .get(&Algorithm::Sha256)
+        .unwrap()
+        .to_string()
+        .trim_end_matches('=')
+        .to_string()
+        .replace('+', "-")
+        .replace('/', "_");
+
     // Create a relative distinguished name.
-    let rdns = RdnSequence::encode_from_string("CN=localhost")?;
+    let rdns = match pkg {
+        Package::Remote(PackageSpec::Slug(ref slug)) => format!("CN={slug}@{digest}"),
+        Package::Remote(PackageSpec::Url(ref url)) => format!("CN={url}@{digest}"),
+        Package::Local { .. } => format!("CN=localhost@{digest}"),
+    };
+    let rdns = RdnSequence::encode_from_string(&rdns)?;
 
     // Create the extensions.
     let ku = KeyUsage(KeyUsages::DigitalSignature | KeyUsages::KeyEncipherment).to_vec()?;
@@ -202,7 +315,7 @@ pub fn selfsigned(key: impl AsRef<[u8]>) -> anyhow::Result<Vec<Vec<u8>>> {
         tbs_certificate: tbs,
         signature_algorithm: alg,
         signature: BitStringRef::from_bytes(&sig)?,
-    };
-
-    Ok(vec![crt.to_vec()?])
+    }
+    .to_vec()?;
+    Ok(vec![crt])
 }

@@ -10,6 +10,7 @@ license = "Apache-2.0"
 [features]
 bench = ["dep:tracing-flame"]
 dbg = ["rustls/logging"]
+server = []
 
 [dependencies]
 anyhow = { workspace = true }
@@ -25,9 +26,10 @@ once_cell = { workspace = true }
 pkcs8 = { workspace = true }
 ring = { workspace = true }
 rustix = { workspace = true }
-rustls = { workspace = true }
+rustls = { workspace = true, features = ["dangerous_configuration"] }
 sec1 = { workspace = true }
 serde = { workspace = true }
+serde_json = { version = "1.0.91" }
 sha2 = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_info", "std"] }
@@ -35,7 +37,7 @@ tracing-subscriber = { workspace = true, features = ["ansi", "smallvec", "std", 
 ureq = { workspace = true, features = ["charset", "json", "tls"] }
 url = { workspace = true, features = ["serde"] }
 wasi-common = { workspace = true }
-wasmtime = { workspace = true }
+wasmtime = { workspace = true, features = ["async"] }
 wasmtime-vfs-dir = { workspace = true }
 wasmtime-vfs-file = { workspace = true }
 wasmtime-vfs-keyfs = { workspace = true }
@@ -43,7 +45,7 @@ wasmtime-vfs-ledger = { workspace = true }
 wasmtime-vfs-memory = { workspace = true }
 wasmtime-wasi = { workspace = true }
 webpki-roots = { workspace = true }
-wiggle = { workspace = true, features = ["tracing_log"] }
+wiggle = { workspace = true, features = ["tracing_log", "wasmtime_async"] }
 x509-cert = { workspace = true }
 zeroize = { workspace = true }
 

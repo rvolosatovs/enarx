@@ -2,10 +2,13 @@
 
 //! A WasiFile for transparent TLS
 
+use super::super::identity::Peer;
+use super::AcceptMetadata;
+
 use std::any::Any;
 use std::io;
 use std::io::{IoSlice, IoSliceMut, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cap_std::net::{Shutdown, TcpListener as CapListener, TcpStream as CapStream};
 #[cfg(windows)]
@@ -17,7 +20,10 @@ use rustls::cipher_suite::{
 };
 use rustls::kx_group::{SECP256R1, SECP384R1, X25519};
 use rustls::version::TLS13;
-use rustls::{ClientConfig, ClientConnection, Connection, ServerConfig, ServerConnection};
+use rustls::{
+    Certificate, ClientConfig, ClientConnection, Connection, ServerConfig, ServerConnection,
+};
+use std::sync::mpsc;
 use wasi_common::file::{FdFlags, FileType, RiFlags, RoFlags, SdFlags, SiFlags};
 use wasi_common::{Context, Error, ErrorExt, ErrorKind, WasiFile};
 #[cfg(unix)]
@@ -145,10 +151,19 @@ impl Stream {
             tls,
             nonblocking: false, // this is only valid under assumption that this executable has opened the socket
         };
+        while stream.tls.is_handshaking() {
+            stream
+                .complete_io()
+                .context("failed to complete connection I/O")?;
+        }
         stream
             .complete_io()
             .context("failed to complete connection I/O")?;
         Ok(stream)
+    }
+
+    pub fn peer_certificates(&self) -> &[Certificate] {
+        self.tls.peer_certificates().unwrap_or_default()
     }
 
     fn complete_io(&mut self) -> Result<(), Error> {
@@ -300,11 +315,20 @@ impl WasiFile for Stream {
 pub struct Listener {
     listener: CapListener,
     cfg: Arc<ServerConfig>,
+    accepted: Arc<Mutex<mpsc::Sender<AcceptMetadata>>>,
 }
 
 impl Listener {
-    pub fn new(listener: CapListener, cfg: Arc<ServerConfig>) -> Self {
-        Self { listener, cfg }
+    pub fn new(
+        listener: CapListener,
+        cfg: Arc<ServerConfig>,
+        accepted: Arc<Mutex<mpsc::Sender<AcceptMetadata>>>,
+    ) -> Self {
+        Self {
+            listener,
+            cfg,
+            accepted,
+        }
     }
 }
 
@@ -331,7 +355,7 @@ impl WasiFile for Listener {
     }
 
     async fn sock_accept(&mut self, fdflags: FdFlags) -> Result<Box<dyn WasiFile>, Error> {
-        let (tcp, ..) = self.listener.accept()?;
+        let (tcp, addr) = self.listener.accept()?;
 
         let tls = ServerConnection::new(self.cfg.clone())
             .map_err(|e| Error::io().context(e))
@@ -347,6 +371,11 @@ impl WasiFile for Listener {
             .set_fdflags(FdFlags::empty())
             .await
             .context("failed to unset client stream FD flags")?;
+        while stream.tls.is_handshaking() {
+            stream
+                .complete_io()
+                .context("failed to complete connection I/O")?;
+        }
         stream
             .complete_io()
             .context("failed to complete connection I/O")?;
@@ -354,7 +383,14 @@ impl WasiFile for Listener {
             .set_fdflags(fdflags)
             .await
             .context("failed to set requested client stream FD flags")?;
-        Ok(Box::new(stream))
+        let peer =
+            Peer::from_certs(stream.peer_certificates()).map_err(|e| Error::io().context(e))?;
+        self.accepted
+            .lock()
+            .expect("failed to lock")
+            .send(AcceptMetadata { addr, peer })
+            .map_err(|e| Error::io().context(e))?;
+        Ok(stream.into())
     }
 
     async fn get_filetype(&mut self) -> Result<FileType, Error> {

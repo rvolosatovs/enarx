@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::cli::BackendOptions;
-use crate::drawbridge::parse_tag;
 use crate::exec::{open_package, run_package, EXECS};
 
 use std::fmt::Debug;
@@ -14,7 +13,7 @@ use crate::backend::Signatures;
 use anyhow::{anyhow, bail, Context};
 use camino::Utf8PathBuf;
 use clap::Args;
-use enarx_exec_wasmtime::{Package, PACKAGE_CONFIG, PACKAGE_ENTRYPOINT};
+use enarx_exec_wasmtime::{Package, PackageSpec, PACKAGE_CONFIG, PACKAGE_ENTRYPOINT};
 use url::Url;
 
 /// Deploy an Enarx package to an Enarx Keep.
@@ -77,28 +76,13 @@ impl Options {
             Signatures::load(signatures)?
         };
 
-        let package = match package
+        match package
             .parse()
             .ok()
             .filter(|url: &Url| !url.cannot_be_a_base())
         {
-            None => {
-                use drawbridge_client::API_VERSION;
-
-                let (host, user, repo, tag) = parse_tag(&package)
-                    .with_context(|| format!("failed to parse `{package}` as a Drawbridge slug"))?;
-                format!("https://{host}/api/v{API_VERSION}/{user}/{repo}/_tag/{tag}")
-                    .parse()
-                    .with_context(|| {
-                        format!("failed to construct a URL from Drawbridge slug `{package}`")
-                    })?
-            }
-            Some(url) => url,
-        };
-
-        match package.scheme() {
-            "file" => {
-                let path = package
+            Some(url) if url.scheme() == "file" => {
+                let path = url
                     .to_file_path()
                     .map_err(|()| anyhow!("failed to parse file path from URL `{}`", package))?;
                 let md = fs::metadata(&path).with_context(|| {
@@ -148,19 +132,31 @@ impl Options {
 
             // The WASM module and config will be downloaded from a remote by exec-wasmtime
             // TODO: Disallow `http` or guard by an `--insecure` flag
-            "http" | "https" => run_package(
+            Some(url) if url.scheme() == "http" || url.scheme() == "https" => run_package(
                 backend,
                 exec,
                 signatures,
                 gdblisten,
-                || Ok(Package::Remote(package)),
+                || Ok(Package::Remote(PackageSpec::Url(url))),
                 #[cfg(unix)]
                 log_level,
                 #[cfg(all(unix, feature = "bench"))]
                 profile,
             ),
 
-            s => bail!("unsupported scheme: {}", s),
+            None => run_package(
+                backend,
+                exec,
+                signatures,
+                gdblisten,
+                || Ok(Package::Remote(PackageSpec::Slug(package))),
+                #[cfg(unix)]
+                log_level,
+                #[cfg(all(unix, feature = "bench"))]
+                profile,
+            ),
+
+            Some(url) => bail!("unsupported URL scheme: `{}`", url.scheme()),
         }
     }
 }

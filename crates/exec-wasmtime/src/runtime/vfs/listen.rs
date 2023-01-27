@@ -2,7 +2,7 @@
 
 //! A file system providing incoming network connectivity.
 
-use super::super::net::tls;
+use super::super::net::{tls, AcceptMetadata};
 use super::super::WasiResult;
 
 use std::any::Any;
@@ -11,12 +11,15 @@ use std::io::{IoSlice, IoSliceMut, SeekFrom};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use anyhow::Context;
 use cap_std::net::TcpListener;
 use enarx_config::IncomingNetwork;
+use rustls::server::{ClientCertVerified, ClientCertVerifier};
 use rustls::{Certificate, PrivateKey};
+use std::sync::mpsc;
 use wasi_common::dir::{ReaddirCursor, ReaddirEntity};
 use wasi_common::file::{Advice, FdFlags, FileType, Filestat, OFlags};
 use wasi_common::{Error, ErrorExt, SystemTimeSpec, WasiDir, WasiFile};
@@ -29,9 +32,32 @@ use zeroize::Zeroizing;
 // NOTE: Directory-specific functionality is duplicated from `wasmtime_vfs_dir::Directory`
 // implementation. There should be a better API provided to handle this.
 
+#[derive(Debug)]
 pub struct ListenState {
     policy: IncomingNetwork,
     tls_config: Arc<rustls::ServerConfig>,
+    accepted: Arc<Mutex<mpsc::Sender<AcceptMetadata>>>,
+}
+
+struct NoopClientCertVerifier;
+
+impl ClientCertVerifier for NoopClientCertVerifier {
+    fn client_auth_mandatory(&self) -> Option<bool> {
+        Some(false)
+    }
+
+    fn client_auth_root_subjects(&self) -> Option<rustls::DistinguishedNames> {
+        Some(vec![])
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &Certificate,
+        _intermediates: &[Certificate],
+        _now: SystemTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
 }
 
 pub struct Listen(Link<ListenState>);
@@ -43,22 +69,28 @@ impl Listen {
         certs: Arc<Vec<Certificate>>,
         key: Arc<Zeroizing<Vec<u8>>>,
         policy: IncomingNetwork,
-    ) -> anyhow::Result<Arc<dyn Node>> {
+    ) -> anyhow::Result<(Arc<dyn Node>, mpsc::Receiver<AcceptMetadata>)> {
         let certs = certs.deref().clone();
         let key = PrivateKey(key.deref().deref().clone());
         let tls_config = rustls::ServerConfig::builder()
             .with_cipher_suites(tls::DEFAULT_CIPHER_SUITES)
             .with_kx_groups(tls::DEFAULT_KX_GROUPS)
             .with_protocol_versions(tls::DEFAULT_PROTOCOL_VERSIONS)?
-            .with_no_client_auth() // TODO: https://github.com/enarx/enarx/issues/1547
+            .with_client_cert_verifier(Arc::new(NoopClientCertVerifier))
             .with_single_cert(certs, key)
             .map(Arc::new)
             .context("failed to construct TLS config")?;
         let id = parent.id().device().create_inode();
         let parent = Arc::downgrade(&parent);
-        let data = Data::from(ListenState { tls_config, policy }).into();
+        let (accepted, accepted_rx) = mpsc::channel();
+        let data = Data::from(ListenState {
+            tls_config,
+            policy,
+            accepted: Arc::new(accepted.into()),
+        })
+        .into();
         let inode = Inode { data, id }.into();
-        Ok(Arc::new(Self(Link { parent, inode })))
+        Ok((Arc::new(Self(Link { parent, inode })), accepted_rx))
     }
 
     fn prev(self: &Arc<Self>) -> Arc<dyn Node> {
@@ -121,19 +153,22 @@ impl Node for Listen {
     #[instrument]
     async fn open_file(
         self: Arc<Self>,
-        _path: &str,
+        path: &str,
         _dir: bool,
         read: bool,
         write: bool,
         flags: FdFlags,
     ) -> WasiResult<Box<dyn WasiFile>> {
-        Ok(Box::new(OpenListen(Open {
-            root: self.root(),
-            link: self,
-            state: State::from(flags).into(),
-            write,
-            read,
-        })))
+        match path {
+            "" | "." => Ok(Box::new(OpenListen(Open {
+                root: self.root(),
+                link: self,
+                state: State::from(flags).into(),
+                write,
+                read,
+            }))),
+            _ => Err(Error::not_supported()),
+        }
     }
 }
 
@@ -241,11 +276,16 @@ impl WasiDir for OpenListen {
                         .context("cannot set anything other than NONBLOCK"));
                 }
 
-                let state = &self.link.inode.data.read().await.content;
+                let state = &mut self.link.inode.data.write().await.content;
                 match state.policy.get(port) {
                     enarx_config::Incoming::Tcp => Ok(wasmtime_wasi::net::Socket::from(tcp).into()),
                     enarx_config::Incoming::Tls => {
-                        Ok(tls::Listener::new(tcp, state.tls_config.clone()).into())
+                        let listener = tls::Listener::new(
+                            tcp,
+                            state.tls_config.clone(),
+                            state.accepted.clone(),
+                        );
+                        Ok(listener.into())
                     }
                 }
             }
